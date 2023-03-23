@@ -4,7 +4,7 @@ Example python data pipeline using asyncio for making RPC calls to an ethereum n
 
 ## Questions
 
-All questions have been answered using Flispide Crypto data. I have included an example python data pipeline for pulling data from an evm node.
+All questions have been answered using Flispide Crypto data. An api is available for each query such that the results can be pulled directly into a pandas dataframe for analysis.
 
 ### Question 1
 

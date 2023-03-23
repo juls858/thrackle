@@ -1,25 +1,33 @@
-## Question 1
+# Overview
+
+Example python data pipeline using asyncio for making RPC calls to an ethereum node.
+
+## Questions
+
+All questions have been answered using Flispide Crypto data. I have included an example python data pipeline for pulling data from an evm node.
+
+### Question 1
 
 Get uniswap v3 pool tick spacing for the following contract addresses: WBTC / ETH for
 the fee tiers 0.01%, 0.05%, 0.3% 1%.
 ___
 
-### WBTC / ETH 0.01%
+#### WBTC / ETH 0.01%
 
 * Contract: 0xe6ff8b9A37B0fab776134636D9981Aa778c4e718
 * Tick spacing: 1
 
-### WBTC / ETH 0.05%
+#### WBTC / ETH 0.05%
 
 * Contract: 0x4585FE77225b41b697C938B018E2Ac67Ac5a20c0
 * Tick spacing: 10
 
-### WBTC / ETH 0.3%
+#### WBTC / ETH 0.3%
 
 * Contract: 0xCBCdF9626bC03E24f779434178A73a0B4bad62eD
 * Tick spacing: 60
 
-### WBTC / ETH 1%
+#### WBTC / ETH 1%
 
 * Contract: 0x6Ab3bba2F41e7eAA262fa5A1A9b3932fA161526F
 * Tick spacing: 200
@@ -27,7 +35,7 @@ ___
 This [query](https://flipsidecrypto.xyz/edit/queries/4280b6d5-72b5-44f0-a03a-bc674fb938ec) was used to find the answer.
 ___
 
-## Question 2
+### Question 2
 
 Create a time series for the total locked value (TVL) for pools listed in #1 by minute and hour. Also calculate the change in Δ TVL and price between each time interval. Start with the most recent month and then expand the dataset to the starting point of Uniswap v3 (May 5, 2022)
 ___
@@ -40,7 +48,7 @@ The following parameterized query can be run for any pool. Use the desired contr
 
 ___
 
-## Question 3
+### Question 3
 
 Find TVL of active and inactive positions for a point in time for Uniswap v3 pools listed in #1 that are active and inactive for a point in time,
 For example, what is the total locked value for active and inactive liquidity positions at 6:00 am on March 7, 2023, when the open price of WBTC / ETH 0.05% live DEX price was 22833.952. Choose a time and date that’s accessible on coin market cap or another similar site.
@@ -51,7 +59,7 @@ The following parameterized query can be run for any pool. Use the desired contr
 
 ___
 
-## Question 4
+### Question 4
 
 This is a challenging question! While liquidity can be reconstructed with mints and burns, researchers would like point in time information for current tick ranges. Create a function to represent the current liquidity mapped to ticks. If possible use Uniswap v3 pool: WBTC / ETH for fee tiers 0.05%
 

@@ -67,6 +67,6 @@ This is a challenging question! While liquidity can be reconstructed with mints 
 2. Then translate the bitmap index into liquidity by ticks for the current point in time.
 
 ___
-The following parameterized query can be run for any pool. Use the desired contract address in Q1 populate the *pool_address* parameter to run the query for the desired pool.
+The following parameterized query can be run for any pool. Use the desired contract address in Q1 populate the *pool_address* parameter to run the query for the desired pool. Also set the *tick_spacing* parameter to the corresponding tick space.
 
 [Answer](https://flipsidecrypto.xyz/edit/queries/4a1919d8-f58a-40c4-ac55-1e7690f08602)

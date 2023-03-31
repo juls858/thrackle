@@ -22,6 +22,7 @@ SERVICE_NAME = os.getenv("POWERTOOLS_SERVICE_NAME")
 # NODE
 QUICKNODE_API_KEY=os.getenv("QUICKNODE_API_KEY", "53fa4e1be29c13e2cf63de4bbf2366cfc752ffe9/")
 QUICKNODE_SERVICE=os.getenv("QUICKNODE_SERVICE", f"https://skilled-thrilling-sheet.quiknode.pro/{QUICKNODE_API_KEY}")
+PROVIDER= os.getenv("PROVIDER", "")
 
 PRODUCER_LIMIT_SIZE = int(os.getenv("PRODUCER_LIMIT_SIZE", "1650000"))
 PRODUCER_BATCH_SIZE = int(os.getenv("PRODUCER_BATCH_SIZE", "165000"))

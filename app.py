@@ -1,14 +1,8 @@
 from autologging import logged
 from aws_lambda_powertools import Logger
 
-from clients import RestClient
-from environment import (
-    DEFAULT_REQUEST_TIMEOUT,
-    ENV,
-    QUICKNODE_API_KEY,
-    QUICKNODE_SERVICE,
-    SERVICE_NAME,
-)
+from clients import BatchJsonRpcClient
+from environment import DEFAULT_REQUEST_TIMEOUT, ENV
 from utils import Metadata, UtilsMixIn
 
 ASYNC_WAIT_TIMEOUT = 800
@@ -21,7 +15,7 @@ logger = Logger(location=LOCATION_FORMAT)
 
 
 @logged(logger)
-class ContractReader(RestClient, UtilsMixIn):
+class ContractReader(BatchJsonRpcClient, UtilsMixIn):
     """Hits Etherscan API to fetch Ethereum smart contract ABIs"""
 
     def _transform_responses(self, session, responses, requests):
@@ -75,38 +69,30 @@ class ContractReader(RestClient, UtilsMixIn):
             "id": f"{contract_address}-{function_signature}-{call_name}-{function_input}-{block_number}",
         }
 
-    def pad_string(
-        self, prefix: str = "", suffix: str = "", max_length: int = 74, char: str = "0"
-    ) -> str:
-        """
-        Pad a string (prefix, suffix, both) with a given character to a given length
-
-        Example:
-        ```python
-        pad_sting("0x", "1234", 64, "0")
-        >>> "0x0000000000000000000000000000000000000000000000000000000000001234"
-        ```
-        """
-        padding = char * max_length
-        start = len(prefix)
-        end = max_length - len(suffix)
-        return f"{prefix}{padding[start:end]}{suffix}"
-
 
 if __name__ == "__main__":
 
     meta = Metadata(
         request_id=None,
-        app_name="Uniswap v3 Pipeline",
+        app_name="Uniswapv3 Pipeline",
         batch_id=None,
     )
+    # get new uniswap positions from NFT Manager
+    # contract_address,
+    # function_signature,
+    # call_name,
+    # function_input,
+    # block_number
     pools = [
-        "0x309d54007b48a76139152b211b3a6c847943a617",
-
+        [
+            "0x309d54007b48a76139152b211b3a6c847943a617",
+            "0x1a686502",  # liquidity()
+            "pool reads",
+            None,
+            16850000, # block height
+        ]
     ]
-    reader = ContractReader(
-        meta=meta,
-        env=ENV.lower(),
-        work_items=pools,
-    )
-    reader.fetch()
+    reader = ContractReader(meta=meta, env=ENV.lower(), result_batches=pools)
+    reader.load_work()
+
+    print(reader.files)

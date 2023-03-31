@@ -1,3 +1,4 @@
+from pprint import pprint
 from autologging import logged
 from aws_lambda_powertools import Logger
 
@@ -95,4 +96,4 @@ if __name__ == "__main__":
     reader = ContractReader(meta=meta, env=ENV.lower(), result_batches=pools)
     reader.load_work()
 
-    print(reader.files)
+    pprint(reader.results)

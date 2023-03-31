@@ -2,14 +2,13 @@
 
 import asyncio
 import gzip
-import json
 import logging
 import os
 from abc import ABC, abstractmethod
 from dataclasses import asdict
 from itertools import starmap
 from pathlib import Path
-from typing import Any, Iterable, Set, Union
+from typing import Any, Iterable, Set
 
 import aiofiles
 import backoff
@@ -17,13 +16,14 @@ import simplejson as json
 from aiohttp import ClientError, ClientResponseError, ClientSession
 from autologging import logged
 from aws_lambda_powertools import Logger
-from funcy import cat, chunks
+from funcy import chunks, lcat
 
 from environment import (
     ASYNC_CONCURRENT_REQUESTS,
     BATCH_CALL_LIMIT,
     DEFAULT_REQUEST_TIMEOUT,
-    QUICKNODE_SERVICE,
+    PROVIDER,
+    QUICKNODE_API_KEY,
     SERVICE_NAME,
     TEMP_DIR,
 )
@@ -33,7 +33,6 @@ from utils import (
     JsonRpcMetadata,
     Metadata,
     Node,
-    RestAPIMetadata,
     Timed,
     UtilsMixIn,
 )
@@ -48,8 +47,8 @@ for (
     if "snowflake" in name:
         logging.getLogger(name).propagate = False
 
-quicknode_ethereum = Node(
-    host=QUICKNODE_SERVICE,
+node_provider = Node(
+    host=PROVIDER,
     auth=None,
     headers={
         "Content-Type": "application/json",
@@ -71,18 +70,22 @@ class BaseClient(UtilsMixIn, ABC):
     # file_map: dict = {}
 
     def __init__(
-        self, env: str, meta: Metadata, work_items: str
+        self,
+        env: str,
+        meta: Metadata,
+        result_batches: str,
     ) -> None:
         self.temp_dir = Path(TEMP_DIR)
         self.files: Set[Path] = set()
         self.metadata = meta
         self.pending = set()
         self.env = env
-        self.work_items = self.deserialize(work_items)
+        self.result_batches = result_batches
+
         self.semaphore: asyncio.BoundedSemaphore = None
 
     @Timed(log_fn=logger.info)
-    def fetch(self):
+    def load_work(self):
         """Load Work"""
         self.execute_work()
 
@@ -98,23 +101,42 @@ class BaseClient(UtilsMixIn, ABC):
         """
 
     def _set_query_results(self) -> int:
-        query_id = self.query_id
+
+        row_count = sum([len(batch) for batch in self.result_batches])
         self.__log.info(
-            f"Retrieving results for query id: {query_id}", extra={"query_id": query_id}
-        )
-        if hasattr(self.work_items[0], "rowcount"):
-            row_count = sum([batch.rowcount for batch in self.work_items])
-        else:
-            row_count = sum([len(batch) for batch in self.work_items])
-        self.__log.info(
-            f"Query id: {query_id} returned {row_count:,} rows",
+            f"Processed {row_count:,} rows",
             extra={
-                "query_id": query_id,
                 "row_count": row_count,
-                "batches": self.work_items,
+                "batches": self.result_batches,
             },
         )
         return row_count
+
+    @Timed(log_fn=logger.debug, start_msg="")
+    def update_external_table_metadata(self, files: Iterable[Path]) -> None:
+        """Update the external table metadata"""
+        sql = self.sql_refresh.format(files="','".join([str(f) for f in files]))
+        self.__log.info(f"Query: [{sql}]")
+        results = self.cursor.execute(sql).fetchall()
+        for row in results:
+            details = {
+                column.name: row[i] for i, column in enumerate(self.cursor.description)
+            }
+            if details["status"] == "REGISTERED_NEW":
+                self.__log.info(
+                    details["status"],
+                    extra=self.rename_dict_keys(prefix_suffix="_", obj=details),
+                )
+            elif details["status"] == "REGISTER_SKIPPED":
+                self.__log.info(
+                    details["status"],
+                    extra=self.rename_dict_keys(prefix_suffix="_", obj=details),
+                )
+            else:
+                self.__log.error(
+                    details["status"],
+                    extra=self.rename_dict_keys(prefix_suffix="_", obj=details),
+                )
 
     async def _cancel_pending_tasks(self, tasks, pending) -> None:
         for task in pending:
@@ -146,6 +168,11 @@ class BaseClient(UtilsMixIn, ABC):
                 )
             )
 
+    def _get_partition(self, block) -> int:
+        """Partition by block_number into groups of 10^5"""
+        block_number = int(block)
+        return round(block_number, -5)
+
     def log_file_sizes(self):
         """Log the sizes of the files passed in"""
         for file in self.files:
@@ -160,10 +187,14 @@ class BaseClient(UtilsMixIn, ABC):
 
 
 @logged(logger)
-class RestClient(BaseClient):
-    """Client to help fetch from a Rest API"""
+class BatchJsonRpcClient(BaseClient):
+    """Hits Json RPC Node to read smart contract data"""
 
-    node: Node = quicknode_ethereum
+    node: Node = node_provider
+
+    def __init__(self, env: str, meta: Metadata, result_batches: str) -> None:
+        super().__init__(env, meta, result_batches)
+        self.results = []
 
     async def _do_work(self) -> Set[asyncio.Task]:
         tasks = []
@@ -179,50 +210,26 @@ class RestClient(BaseClient):
                 os.remove(file.path)
 
         async with ClientSession(
-            raise_for_status=True, base_url=self.base_url  # pylint: disable=no-member
+            headers=self.node.headers,
+            raise_for_status=True,
+            base_url=self.node.host,
         ) as session:
 
-            for current_calls in chunks(
-                self.CONCURRENT_REQUESTS, cat(self.work_items)
-            ):
+            for batch in chunks(BATCH_CALL_LIMIT, self.result_batches):
 
-                for cur_request_data in current_calls:
-                    tasks.append(
-                        asyncio.create_task(
-                            self._execute_api_call(
-                                session=session,
-                                request_data=self.create_rest_call(cur_request_data),
-                            )
+                tasks.append(
+                    asyncio.create_task(
+                        self._execute_batch_rpc_call(
+                            session=session,
+                            request_data=list(starmap(self.create_rpc_request, batch)),
                         )
                     )
+                )
 
-            _, pending = await asyncio.wait(tasks, timeout=ASYNC_WAIT_TIMEOUT)
+            results, pending = await asyncio.wait(tasks, timeout=ASYNC_WAIT_TIMEOUT)
             await self._cancel_pending_tasks(tasks, pending)
+            self.results = lcat([x.result() for x in results])
             self.log_file_sizes()
-
-    def _get_request_metadata(self, session, request_) -> dict:
-        return asdict(
-            RestAPIMetadata(
-                base_url=str(session._base_url),  # pylint: disable=protected-access
-                request=request_,
-                **asdict(self.metadata),
-            )
-        )
-
-    async def _execute_api_call(self, session: ClientSession, request_data: dict):
-        async with self.semaphore:
-            request, response = await self._send_request(
-                session=session, requests=request_data
-            )
-
-            transformed = self._transform_responses(
-                session=session, response=response, request_data=request
-            )
-
-            await self._dump(
-                self._get_partition(transformed["block_number"]),
-                transformed,
-            )
 
     @backoff.on_exception(
         backoff.expo,
@@ -236,7 +243,7 @@ class RestClient(BaseClient):
         backoff_log_level=logging.DEBUG,
         giveup_log_level=logging.DEBUG,
     )
-    async def _send_request(
+    async def _send_batch_request(
         self, session: ClientSession, requests: Iterable[dict]
     ) -> Iterable[dict]:
         if self.node.headers.get("Content-Encoding", {}) in ("gzip", "GZIP"):
@@ -246,7 +253,7 @@ class RestClient(BaseClient):
 
         async with AsyncTimedContextManger(
             log_fn=self.__log.info  # pylint: disable=no-member
-        ), session.request("POST", url=self.url, **payload) as response:
+        ), session.request("POST", url=QUICKNODE_API_KEY, **payload) as response:
             responses = await response.json()
         return responses
 
@@ -259,8 +266,57 @@ class RestClient(BaseClient):
             )
         )
 
-    @abstractmethod
-    def create_rest_call(self, request_data: list):
+    async def _execute_batch_rpc_call(
+        self, session: ClientSession, request_data: Iterable
+    ) -> list:
+        async with self.semaphore:
+            responses = await self._send_batch_request(
+                session=session, requests=request_data
+            )
+            request_lookup = {request["id"]: request for request in request_data}
+
+            transformed = self._transform_responses(session, responses, request_lookup)
+
+            results = []
+            for result in transformed:
+                await self._dump(self.get_temp_file_stem(result), result)
+                results.append(result)
+
+            return results
+
+
+    def get_temp_file_stem(self, result):
+        """Override to change file stem of temp files"""
+        return int(result["data"]["id"].split("-")[-1])
+
+    @staticmethod
+    def pad_string(
+        prefix: str = "", suffix: str = "", max_length: int = 74, char: str = "0"
+    ) -> str:
         """
-        Create the payload for the rest call
+        Pad a string (prefix, suffix, both) with a given character to a given length
+
+        Example:
+        ```python
+        pad_sting("0x", "1234", 64, "0")
+        >>> "0x0000000000000000000000000000000000000000000000000000000000001234"
+        ```
+        """
+        padding = char * max_length
+        start = len(prefix)
+        end = max_length - len(suffix)
+        return f"{prefix}{padding[start:end]}{suffix}"
+
+    @abstractmethod
+    def create_rpc_request(self) -> dict:
+        """
+        Create the RPC payload for the call to the contract
+        args are passed in by position, so the first argument is the first argument
+        returns a dictionary following JSON RPC 2.0 spec
+        """
+
+    @abstractmethod
+    def _transform_responses(self, session, responses, requests: dict) -> Any:
+        """
+        Transform the responses from the RPC call into the proper format and add metadata.
         """
